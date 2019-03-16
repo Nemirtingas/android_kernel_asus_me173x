@@ -13,6 +13,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# At kernel offset there is a mtk specific header
+#  4bytes int magic: 88 16 88 58
+#  4bytes int kernel size
+#  32 bytes string : KERNEL
+#  Padding to 512 with 0xFF
+# Then kernel file starts
+
+# At ramdisk offset, there is also a mtk specific header
+#  4bytes int magic: 88 16 88 58
+#  4bytes int ramdisk size
+#  32 bytes string : RECOVERY
+#  Padding to 512 with 0xFF
+# Then ramdisk file starts
+
 from __future__ import print_function
 from sys import argv, exit, stderr
 from argparse import ArgumentParser, FileType, Action
@@ -63,8 +77,20 @@ def write_header(args):
     args.output.write(pack('512s', args.cmdline[:512].encode()))
 
     sha = sha1()
+    sha.update(pack('2I32s472s', 
+        args.mtk_magic,
+        filesize(args.kernel),
+        'KERNEL',
+        '\xFF'*472))
     update_sha(sha, args.kernel)
+
+    sha.update(pack('2I32s472s', 
+        args.mtk_magic,
+        filesize(args.kernel),
+        'RECOVERY',
+        '\xFF'*472))
     update_sha(sha, args.ramdisk)
+
     update_sha(sha, args.second)
     update_sha(sha, args.dt)
     img_id = pack('32s', sha.digest())
@@ -88,7 +114,6 @@ class ValidateStrLenAction(Action):
             raise ValueError('String argument too long: max {0:d}, got {1:d}'.
                 format(self.maxlen, len(values)))
         setattr(namespace, self.dest, values)
-
 
 def write_padded_file(f_out, f_in, padding):
     if f_in is None:
@@ -152,16 +177,32 @@ def parse_cmdline():
     parser.add_argument('--id', help='print the image ID on standard output',
                         action='store_true')
     parser.add_argument('--dt', help='path to the device tree image', type=FileType('rb'))
+    parser.add_argument('--mtk_magic', help='mtk magic number', type=parse_int, required=True)
+    parser.add_argument('--mtk_type', help='mtk image type', action=ValidateStrLenAction, maxlen=32, choices=['RECOVERY'], required=True)
+    parser.add_argument('--mtk_unk1', help='mtk unknown data 1', type=FileType('rb'), required=True)
+    parser.add_argument('--mtk_unk2', help='mtk unknown data 1', type=FileType('rb'), required=True)
     parser.add_argument('-o', '--output', help='output file name', type=FileType('wb'),
                         required=True)
     return parser.parse_args()
 
 
 def write_data(args):
+    args.output.write(pack('2I32s472s', 
+        args.mtk_magic,
+        filesize(args.kernel),
+        'KERNEL',
+        '\xFF'*472))
     write_padded_file(args.output, args.kernel, args.pagesize)
+    args.output.write(pack('2I32s472s', 
+        args.mtk_magic,
+        filesize(args.ramdisk)-512,
+        args.mtk_type,
+        '\xFF'*472))
     write_padded_file(args.output, args.ramdisk, args.pagesize)
     write_padded_file(args.output, args.second, args.pagesize)
     write_padded_file(args.output, args.dt, args.pagesize)
+    write_padded_file(args.output, args.mtk_unk1, args.pagesize)
+    write_padded_file(args.output, args.mtk_unk2, args.pagesize)
 
 
 def main():

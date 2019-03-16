@@ -87,6 +87,7 @@ def read_header(args, off):
     # find common base of all loading addresses
     parsed.base = min(parsed.kernel_addr, parsed.ramdisk_addr, parsed.second_addr, parsed.tags_addr)
     parsed.base = ROUNDDOWN(parsed.base, parsed.pagesize)
+
     if (parsed.base&0xffff) == 0x8000:
         parsed.base -= 0x8000
 
@@ -125,6 +126,17 @@ def write_input_to_file(args, filename, size):
         f_out.write(args.input.read(size))
 
     seek_padding(args.input, size, args.pagesize)
+
+def write_mtkinput_to_file(args, filename, size, imgType):
+    if imgType == 'kernel':
+        with open(filename+".mtkheader", 'wb') as hdr_out:
+            hdr_out.write(args.input.read(512))
+    elif imgType == 'ramdisk':
+        args.input.seek(-512, 1)
+        with open(filename+'.mtkheader', 'wb') as hdr_out:
+            hdr_out.write(args.input.read(512))
+
+    write_input_to_file(args, filename, size)
 
 def fix_ramdisk_extension(filename):
     bytes = []
@@ -178,6 +190,7 @@ def write_data(args, header, off):
     write_str_to_file(file_prefix+'tags_offset', '%08x' % header.tags_offset)
     write_str_to_file(file_prefix+'pagesize', '%d' % header.pagesize)
     write_str_to_file(file_prefix+'name', header.name)
+
     if header.os_version:
         write_str_to_file(file_prefix+'os_version', header.os_version)
     if header.os_patch_level:
@@ -185,46 +198,12 @@ def write_data(args, header, off):
 
     seek_padding(args.input, header.headersz, args.pagesize)
 
-    write_input_to_file(args, file_prefix+'zImage', header.kernel_size)
-    write_input_to_file(args, file_prefix+'ramdisk', header.ramdisk_size)
-    write_input_to_file(args, file_prefix+'second', header.second_size)
-    write_input_to_file(args, file_prefix+'dt', header.dt_size)
+    write_mtkinput_to_file(args, file_prefix+'zImage', header.kernel_size, 'kernel')
+    write_mtkinput_to_file(args, file_prefix+'ramdisk', header.ramdisk_size, 'ramdisk')
+    write_mtkinput_to_file(args, file_prefix+'second', header.second_size, 'second')
+    write_mtkinput_to_file(args, file_prefix+'dt', header.dt_size, 'dt')
 
     fix_ramdisk_extension(file_prefix+'ramdisk')
-
-    if header.kernel_size >= 2:
-        if is_gzip_package(file_prefix+'zImage'):
-            with open(file_prefix+'zImage', 'rb') as f_in:
-                # seek past gzip header
-                f_in.seek(10)
-
-                # write uncompressed zImage
-                with open(file_prefix+'zImage.gunzip', 'wb') as f_out:
-                    decomp = zlib.decompressobj(-15)
-                    f_out.write(decomp.decompress(f_in.read()))
-
-                # write fdt
-                with open(file_prefix+'zImage.fdt', 'wb') as f_out:
-                    f_out.write(decomp.unused_data[8:])
-
-        elif not is_arm64(file_prefix+'zImage'):
-            with open(file_prefix+'zImage', 'rb') as f_in:
-                # get kernel size
-                f_in.seek(0x28)
-                unpacked = auto_unpack('2I', f_in)
-                zimage_start = unpacked[0]
-                zimage_end = unpacked[1]
-                zimage_size = zimage_end - zimage_start;
-
-                if zimage_size<header.kernel_size:
-                    # write zImage
-                    f_in.seek(0)
-                    with open(file_prefix+'zImage.real', 'wb') as f_out:
-                        f_out.write(f_in.read(zimage_size))
-
-                    # write fdt
-                    with open(file_prefix+'zImage.fdt', 'wb') as f_out:
-                        f_out.write(f_in.read())
 
 def main():
     args = parse_cmdline()
